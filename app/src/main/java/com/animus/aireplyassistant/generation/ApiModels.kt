@@ -4,6 +4,8 @@ data class ReplySuggestionsRequest(
     val context: ReplyContextBlock,
     val controls: ControlsBlock,
     val userDraft: String,
+    val surface: String = "tap",
+    val desiredCount: Int = 5,
 )
 
 data class ReplyContextBlock(
@@ -24,6 +26,7 @@ data class ControlsBlock(
 )
 
 data class ReplySuggestionsResponse(
+    val source: String = "unknown",
     val suggestions: List<ReplySuggestion>,
 )
 
