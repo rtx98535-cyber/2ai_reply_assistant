@@ -105,6 +105,15 @@ def dedupe_suggestions(suggestions: list[dict[str, str]]) -> list[dict[str, str]
     return out
 
 
+def desired_count_from_payload(payload: dict[str, Any]) -> int:
+    raw = payload.get("desired_count", 5)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 5
+    return max(1, min(5, value))
+
+
 def overlap_count(a: list[dict[str, str]], b: list[dict[str, str]]) -> int:
     sa = {canonical_text(x["text"]) for x in a}
     sb = {canonical_text(x["text"]) for x in b}
@@ -227,6 +236,7 @@ def fallback_pool(style: str) -> list[dict[str, str]]:
 def generate_rules_suggestions(payload: dict[str, Any]) -> list[dict[str, str]]:
     context = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
     controls = payload.get("controls", {}) if isinstance(payload.get("controls"), dict) else {}
+    desired_count = desired_count_from_payload(payload)
     intent = str(context.get("intent", "neutral")).strip().lower() or "neutral"
     style = str(context.get("user_style", "English")).strip() or "English"
     length_mode = str(controls.get("length", "medium")).strip().lower() or "medium"
@@ -244,16 +254,16 @@ def generate_rules_suggestions(payload: dict[str, Any]) -> list[dict[str, str]]:
     out = dedupe_suggestions(out)
     fillers = fallback_pool(style)
     for filler in fillers:
-        if len(out) >= 5:
+        if len(out) >= desired_count:
             break
         out.append(filler)
         out = dedupe_suggestions(out)
 
-    while len(out) < 5:
+    while len(out) < desired_count:
         out.append({"text": "Nice!", "archetype": "short", "tone": "neutral"})
         out = dedupe_suggestions(out)
 
-    return out[:5]
+    return out[:desired_count]
 
 
 class OpenAIClient:
@@ -265,6 +275,7 @@ class OpenAIClient:
             raise RuntimeError("OPENAI_API_KEY missing")
 
         url = f"{self.config.openai_base_url}/v1/chat/completions"
+        desired_count = desired_count_from_payload(payload)
         context = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
         reply_type = str(context.get("reply_type", "comment")).strip().lower() or "comment"
         primary_text = str(context.get("primary_text", "")).strip()
@@ -282,7 +293,7 @@ class OpenAIClient:
         if reply_type == "chat":
             system_prompt = (
                 "You generate direct, in-context reply suggestions for social/chat inputs. "
-                "Output strict JSON with key 'suggestions' containing exactly 5 objects. "
+                f"Output strict JSON with key 'suggestions' containing exactly {desired_count} objects. "
                 "Each object keys: text, archetype, tone. "
                 "Archetype one of: witty, supportive, short, curious, direct. "
                 "Tone one of: playful, friendly, neutral, serious. "
@@ -292,7 +303,7 @@ class OpenAIClient:
                 "Preserve the original meaning, topic, entities, and language."
             )
             user_payload = {
-                "task": "Return exactly 5 polished rewrites of primary_text.",
+                "task": f"Return exactly {desired_count} polished rewrites of primary_text.",
                 "focus_rules": [
                     "use only primary_text",
                     "no side-topic additions",
@@ -308,7 +319,7 @@ class OpenAIClient:
         else:
             system_prompt = (
                 "You generate direct, in-context reply suggestions for social feed comments. "
-                "Output strict JSON with key 'suggestions' containing exactly 5 objects. "
+                f"Output strict JSON with key 'suggestions' containing exactly {desired_count} objects. "
                 "Each object keys: text, archetype, tone. "
                 "Archetype one of: witty, supportive, short, curious, direct. "
                 "Tone one of: playful, friendly, neutral, serious. "
@@ -318,7 +329,7 @@ class OpenAIClient:
                 "Use secondary_texts only as supporting context when provided."
             )
             user_payload = {
-                "task": "Return exactly 5 short, sendable replies to the target content.",
+                "task": f"Return exactly {desired_count} short, sendable replies to the target content.",
                 "focus_rules": [
                     "reply to primary_text as another person",
                     "do not rewrite primary_text",
@@ -375,9 +386,9 @@ class OpenAIClient:
                 }
             )
         out = dedupe_suggestions(out)
-        if len(out) != 5:
-            raise RuntimeError(f"Model returned {len(out)} valid suggestions, expected 5")
-        return out[:5]
+        if len(out) != desired_count:
+            raise RuntimeError(f"Model returned {len(out)} valid suggestions, expected {desired_count}")
+        return out[:desired_count]
 
     def _parse_model_json(self, content: str) -> dict[str, Any]:
         text = content.strip()
@@ -570,6 +581,7 @@ class ReplyHandler(BaseHTTPRequestHandler):
 
         install_id = str(self.headers.get("X-Install-Id", "")).strip()
         request_id = str(uuid.uuid4())
+        desired_count = desired_count_from_payload(payload)
 
         rules_output = generate_rules_suggestions(payload)
         primary_output = rules_output
@@ -588,17 +600,20 @@ class ReplyHandler(BaseHTTPRequestHandler):
             primary_source = "rules_primary"
             primary_error = f"Unknown PRIMARY_MODE={CONFIG.primary_mode}, using rules"
 
-        response_payload = {"suggestions": primary_output[:5]}
+        response_payload = {
+            "source": primary_source,
+            "suggestions": primary_output[:desired_count],
+        }
         self._write_json(200, response_payload)
 
         SHADOW.maybe_enqueue(
             request_id=request_id,
             install_id=install_id,
             payload=payload,
-            primary_output=primary_output[:5],
+            primary_output=primary_output[:desired_count],
             primary_source=primary_source,
             primary_error=primary_error,
-            rules_output=rules_output[:5],
+            rules_output=rules_output[:desired_count],
         )
 
     def log_message(self, format: str, *args: Any) -> None:
