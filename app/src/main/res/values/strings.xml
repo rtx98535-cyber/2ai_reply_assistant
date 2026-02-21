@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">AI Reply Assistant</string>
+    <string name="accessibility_service_description">Shows an AI reply button over other apps when you focus a text box. Runs only when you tap the button.</string>
+</resources>
+
