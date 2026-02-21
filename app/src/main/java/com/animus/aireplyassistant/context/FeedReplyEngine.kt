@@ -16,6 +16,9 @@ object FeedReplyEngine {
             root = root,
             controls = controls,
             pointerHint = pointerHint,
+        ).copy(
+            surface = "pointer",
+            desiredCount = 3,
         )
 
         val normalizedReplyType = when (base.context.replyType.trim().lowercase()) {
