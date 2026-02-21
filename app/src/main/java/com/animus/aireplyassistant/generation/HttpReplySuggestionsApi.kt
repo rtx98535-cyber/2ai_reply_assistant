@@ -41,6 +41,8 @@ class HttpReplySuggestionsApi(
                     .put("emoji_level", req.controls.emojiLevel)
                     .put("slang_level", req.controls.slangLevel),
             )
+            .put("surface", req.surface)
+            .put("desired_count", req.desiredCount)
             .put("user_draft", req.userDraft)
 
         val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -64,6 +66,7 @@ class HttpReplySuggestionsApi(
 
     private fun parseResponse(raw: String): ReplySuggestionsResponse {
         val root = JSONObject(raw)
+        val source = root.optString("source", "unknown")
         val arr = root.getJSONArray("suggestions")
         val out = ArrayList<ReplySuggestion>(arr.length())
         for (i in 0 until arr.length()) {
@@ -76,6 +79,9 @@ class HttpReplySuggestionsApi(
                 ),
             )
         }
-        return ReplySuggestionsResponse(out)
+        return ReplySuggestionsResponse(
+            source = source,
+            suggestions = out,
+        )
     }
 }
