@@ -56,10 +56,14 @@ class MockReplySuggestionsApi : ReplySuggestionsApi {
             ReplySuggestion(stylize("Nice one!"), "short", "neutral"),
         )
 
-        val picked = (base + divers).distinctBy { it.text }.take(5).let {
-            if (it.size < 5) it + List(5 - it.size) { idx -> ReplySuggestion("Nice!", "short", "neutral") } else it
+        val desiredCount = req.desiredCount.coerceIn(1, 5)
+        val picked = (base + divers).distinctBy { it.text }.take(desiredCount).let {
+            if (it.size < desiredCount) it + List(desiredCount - it.size) { ReplySuggestion("Nice!", "short", "neutral") } else it
         }
 
-        return ReplySuggestionsResponse(picked)
+        return ReplySuggestionsResponse(
+            source = "openai",
+            suggestions = picked,
+        )
     }
 }
