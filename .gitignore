@@ -1,0 +1,7 @@
+.gradle/
+**/build/
+.idea/
+*.iml
+local.properties
+backend/shadow_logs.jsonl
+backend/.env
