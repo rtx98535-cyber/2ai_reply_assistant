@@ -142,8 +142,10 @@ class ReplyAccessibilityService : AccessibilityService() {
         }
 
         if (::xGptCoordinator.isInitialized && xGptCoordinator.isChatGptPackage(activePackage)) {
-            overlay.setButtonVisible(false)
-            if (!xGptCoordinator.isRunning()) {
+            val running = xGptCoordinator.isRunning()
+            // Keep AI+ visible during active GPT automation so users can see the flow is still alive.
+            overlay.setButtonVisible(running)
+            if (!running) {
                 overlay.dismissPanel()
             }
             return

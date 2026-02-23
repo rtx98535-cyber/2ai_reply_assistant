@@ -240,7 +240,10 @@ class XGptAutomationCoordinator(
         job = null
         session = null
         keepPanelOnNextXReturn = true
-        launchPackage(X_PACKAGE)
+        val launched = launchPackage(X_PACKAGE)
+        if (!launched) {
+            Log.w(logTag, "Could not launch X package after GPT parse. Showing cards in current app.")
+        }
 
         scope.launch {
             delay(450)
@@ -393,25 +396,54 @@ class XGptAutomationCoordinator(
     }
 
     private fun parseReplies(root: AccessibilityNodeInfo): List<String>? {
-        val candidates = collectVisibleTexts(root)
-            .filterNot { it.text.contains(ChatGptPromptBuilder.USER_PROMPT_MARKER, ignoreCase = true) }
+        val visible = collectVisibleTexts(root)
+        val filtered = visible
+            .filterNot(::isPromptEcho)
             .filterNot { isUiChrome(it.text) }
+
+        val candidates = filtered
             .sortedByDescending { it.bounds.bottom }
             .map { it.text.trim() }
             .filter { it.length >= 8 }
             .distinct()
-            .take(14)
+            .take(72)
 
         if (candidates.isEmpty()) return null
 
         val direct = ChatGptReplyParser.parseFromCandidates(candidates)
-        if (direct != null) return direct
+        if (direct != null) {
+            Log.i(logTag, "GPT parse success mode=direct")
+            return direct
+        }
 
         for (i in candidates.indices) {
-            val joined = candidates.drop(i).take(4).joinToString("\n")
+            val joined = candidates.drop(i).take(10).joinToString("\n")
             val parsed = ChatGptReplyParser.parseFromText(joined)
-            if (parsed != null) return parsed
+            if (parsed != null) {
+                Log.i(logTag, "GPT parse success mode=window start=$i")
+                return parsed
+            }
         }
+
+        val pageJoined = filtered
+            .sortedWith(compareBy<NodeText>({ it.bounds.top }, { it.bounds.left }))
+            .map { it.text.trim() }
+            .distinct()
+            .takeLast(220)
+            .joinToString("\n")
+        val fullParsed = ChatGptReplyParser.parseFromText(pageJoined)
+        if (fullParsed != null) {
+            Log.i(logTag, "GPT parse success mode=fullPage")
+            return fullParsed
+        }
+
+        val heuristic = fallbackTriplet(candidates)
+        if (heuristic != null) {
+            Log.i(logTag, "GPT parse fallback mode=heuristic")
+            return heuristic
+        }
+
+        Log.w(logTag, "GPT parse failed candidates=${candidates.take(12)}")
         return null
     }
 
@@ -427,10 +459,16 @@ class XGptAutomationCoordinator(
             if (!node.isVisibleToUser) continue
 
             val text = node.text?.toString()?.trim().orEmpty()
-            if (text.isNotBlank() && text.length <= 3000) {
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            if (text.isNotBlank() || desc.isNotBlank()) {
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
-                out.add(NodeText(text = text, bounds = bounds))
+                if (text.isNotBlank() && text.length <= 3000) {
+                    out.add(NodeText(text = text, bounds = bounds))
+                }
+                if (desc.isNotBlank() && !desc.equals(text, ignoreCase = true) && desc.length <= 3000) {
+                    out.add(NodeText(text = desc, bounds = bounds))
+                }
             }
 
             for (i in 0 until node.childCount) {
@@ -458,8 +496,39 @@ class XGptAutomationCoordinator(
             "post",
         )
         if (exact.contains(t)) return true
+        if (t.startsWith("message ")) return true
+        if (t.contains("chatgpt can make mistakes")) return true
+        if (t.contains("temporary chat")) return true
         if (Regex("^\\d+[smhdwy]$").matches(t)) return true
         return false
+    }
+
+    private fun isPromptEcho(node: NodeText): Boolean {
+        val t = node.text.trim()
+        return t.contains(ChatGptPromptBuilder.USER_PROMPT_MARKER, ignoreCase = true) ||
+            t.contains("Generate exactly 3 options", ignoreCase = true) ||
+            t.contains("You are writing a reply for a post on X", ignoreCase = true) ||
+            t.contains("Extracted post text:", ignoreCase = true)
+    }
+
+    private fun fallbackTriplet(candidates: List<String>): List<String>? {
+        val filtered = candidates
+            .map { it.trim().replace(Regex("\\s+"), " ") }
+            .filter { it.length in 12..320 }
+            .filterNot { isUiChrome(it) }
+            .filterNot {
+                it.contains(ChatGptPromptBuilder.USER_PROMPT_MARKER, ignoreCase = true) ||
+                    it.contains("Generate exactly 3 options", ignoreCase = true) ||
+                    it.contains("Extracted post text", ignoreCase = true)
+            }
+            .distinctBy { it.lowercase() }
+
+        if (filtered.size < 3) return null
+        for (i in 0..(filtered.size - 3)) {
+            val triple = filtered.drop(i).take(3)
+            if (triple.distinctBy { it.lowercase() }.size == 3) return triple
+        }
+        return null
     }
 
     private fun extractBestPostText(root: AccessibilityNodeInfo): String {
@@ -501,4 +570,3 @@ class XGptAutomationCoordinator(
         return null
     }
 }
-
