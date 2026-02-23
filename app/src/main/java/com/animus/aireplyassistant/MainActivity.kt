@@ -81,7 +81,7 @@ private fun Home() {
         }
 
         Text(
-            "Enable the Accessibility Service. After that, focus any chat/comment box and you should see a floating AI button. Tap it to generate suggestions.",
+            "Enable the Accessibility Service. On X, tap AI+ then GPT Reply to auto-send post context and screenshot to ChatGPT and get 3 reply cards.",
             style = MaterialTheme.typography.bodyMedium,
         )
 

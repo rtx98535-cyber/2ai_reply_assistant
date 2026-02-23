@@ -252,6 +252,7 @@ fun SuggestionPanel(
     onManualContextChanged: (String) -> Unit,
     onManualDraftChanged: (String) -> Unit,
     onGenerateChatManual: () -> Unit,
+    onGptReply: () -> Unit,
     onChatReviewEditRequested: () -> Unit,
     onChatReviewCancelEdit: () -> Unit,
     onChatReviewEnhanceAsIs: () -> Unit,
@@ -322,7 +323,11 @@ fun SuggestionPanel(
                 )
             }
 
-            if (!state.chatReviewEditMode) {
+            if (state.gptEntryActive) {
+                GptEntryComposer(onGptReply = onGptReply)
+            }
+
+            if (!state.chatReviewEditMode && !state.gptEntryActive) {
                 ControlsRow(
                     controls = state.controls,
                     onChanged = onControlsChanged,
@@ -337,6 +342,25 @@ fun SuggestionPanel(
                     onPick = onPick,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun GptEntryComposer(
+    onGptReply: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Generate an auto reply in ChatGPT from this post and screenshot.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = onGptReply,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("GPT Reply")
         }
     }
 }

@@ -2,9 +2,11 @@ package com.animus.aireplyassistant.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.animus.aireplyassistant.automation.XGptAutomationCoordinator
 import com.animus.aireplyassistant.context.ContextEngine
 import com.animus.aireplyassistant.context.FeedReplyEngine
 import com.animus.aireplyassistant.core.TextInserter
@@ -19,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -41,6 +44,7 @@ class ReplyAccessibilityService : AccessibilityService() {
     )
 
     private lateinit var overlay: OverlayController
+    private lateinit var xGptCoordinator: XGptAutomationCoordinator
     private lateinit var repo: ReplySuggestionsRepository
     private var lastActivePackage: String? = null
     private var pendingTapDraft: String? = null
@@ -58,7 +62,10 @@ class ReplyAccessibilityService : AccessibilityService() {
             context = this,
             onGenerateTapped = { controls ->
                 Log.d("ReplyEngine", "ENTER onGenerateTapped callback")
-                generateSuggestions(controls)
+                onMainButtonTapped(controls)
+            },
+            onGptReplyTapped = {
+                xGptCoordinator.startFromX()
             },
             onGenerateFromDrop = { controls, point ->
                 Log.d("ReplyEngine", "ENTER onGenerateFromDrop callback x=${point.x} y=${point.y}")
@@ -78,7 +85,15 @@ class ReplyAccessibilityService : AccessibilityService() {
             onChatCorrectGrammar = { generatePendingTapDraftEnhancement(mode = TapDraftMode.GRAMMAR) },
             onChatSendEdited = { context -> generatePendingTapDraftEnhancement(context) },
             onSuggestionPicked = { text -> insertSuggestion(text) },
-            onClosePanel = { pendingTapDraft = null },
+            onClosePanel = {
+                pendingTapDraft = null
+                xGptCoordinator.onPanelClosed()
+            },
+        )
+        xGptCoordinator = XGptAutomationCoordinator(
+            service = this,
+            overlay = overlay,
+            scope = scope,
         )
 
         overlay.attach()
@@ -101,6 +116,9 @@ class ReplyAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        if (::xGptCoordinator.isInitialized) {
+            xGptCoordinator.stop()
+        }
         overlay.detach()
         scope.cancel()
         super.onDestroy()
@@ -112,13 +130,8 @@ class ReplyAccessibilityService : AccessibilityService() {
             return
         }
 
-        val root = findSupportedRoot() ?: run {
-            overlay.setButtonVisible(false)
-            overlay.dismissPanel()
-            return
-        }
-
-        val activePackage = root.packageName?.toString()
+        val activeRoot = rootInActiveWindow
+        val activePackage = activeRoot?.packageName?.toString()
         val packageChanged = activePackage != null && activePackage != lastActivePackage
         lastActivePackage = activePackage
 
@@ -128,22 +141,56 @@ class ReplyAccessibilityService : AccessibilityService() {
             return
         }
 
+        if (::xGptCoordinator.isInitialized && xGptCoordinator.isChatGptPackage(activePackage)) {
+            overlay.setButtonVisible(false)
+            if (!xGptCoordinator.isRunning()) {
+                overlay.dismissPanel()
+            }
+            return
+        }
+
         if (!isSupportedPackage(activePackage)) {
             overlay.setSurfaceMode(OverlaySurfaceMode.UNSUPPORTED)
             overlay.setButtonVisible(false)
-            overlay.dismissPanel()
+            val preserve = ::xGptCoordinator.isInitialized && xGptCoordinator.shouldPreservePanel(activePackage)
+            if (!preserve) {
+                overlay.dismissPanel()
+            }
             return
         }
         overlay.setSurfaceMode(toOverlaySurfaceMode(resolveMode(activePackage)))
 
-        val focused = ContextEngine.findFocusedEditable(root)
-        val sensitive = focused != null && ContextEngine.isSensitiveInput(focused)
-        val visible = focused != null && !sensitive
+        val visible = if (::xGptCoordinator.isInitialized && xGptCoordinator.isXPackage(activePackage)) {
+            true
+        } else {
+            val focused = activeRoot?.let(ContextEngine::findFocusedEditable)
+            val sensitive = focused != null && ContextEngine.isSensitiveInput(focused)
+            focused != null && !sensitive
+        }
 
-        if (!visible || packageChanged || sensitive) {
+        val preserve = ::xGptCoordinator.isInitialized && xGptCoordinator.shouldPreservePanel(activePackage)
+        if ((!visible || packageChanged) && !preserve) {
             overlay.dismissPanel()
         }
         overlay.setButtonVisible(visible)
+    }
+
+    private fun onMainButtonTapped(controls: ControlsBlock) {
+        val root = rootInActiveWindow
+        val activePackage = root?.packageName?.toString().orEmpty()
+        if (::xGptCoordinator.isInitialized && xGptCoordinator.isXPackage(activePackage) && root != null) {
+            val preview = xGptCoordinator.buildPreview(root)
+            overlay.showGptEntry(
+                postTextPreview = if (preview.isBlank()) {
+                    "Post text will be extracted with screenshot when GPT Reply starts."
+                } else {
+                    preview
+                },
+            )
+            return
+        }
+
+        generateSuggestions(controls)
     }
 
     private fun generateSuggestions(
@@ -369,11 +416,36 @@ class ReplyAccessibilityService : AccessibilityService() {
     }
 
     private fun insertSuggestion(text: String) {
-        val focused = findEditableInCurrentOrSupportedWindow() ?: return
-        if (ContextEngine.isSensitiveInput(focused)) return
+        scope.launch {
+            ensureXVisibleForInsert()
+            delay(260)
 
-        val ok = TextInserter.setText(focused, text) || TextInserter.pasteText(applicationContext, focused, text)
-        if (ok) overlay.dismissPanel()
+            val focused = findEditableInCurrentOrSupportedWindow()
+            if (focused == null) {
+                overlay.showError("Open the X reply box, then tap the reply card again.")
+                return@launch
+            }
+            if (ContextEngine.isSensitiveInput(focused)) {
+                overlay.showError("Sensitive field detected. Paste blocked.")
+                return@launch
+            }
+
+            val ok = TextInserter.setText(focused, text) || TextInserter.pasteText(applicationContext, focused, text)
+            if (ok) {
+                overlay.dismissPanel()
+            } else {
+                overlay.showError("Could not paste in X. Focus the reply box and try again.")
+            }
+        }
+    }
+
+    private fun ensureXVisibleForInsert() {
+        val activePkg = rootInActiveWindow?.packageName?.toString().orEmpty()
+        if (activePkg == XGptAutomationCoordinator.X_PACKAGE) return
+
+        val launchIntent = packageManager.getLaunchIntentForPackage(XGptAutomationCoordinator.X_PACKAGE) ?: return
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(launchIntent)
     }
 
     private fun findEditableInCurrentOrSupportedWindow(): AccessibilityNodeInfo? {

@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 class OverlayController(
     private val context: Context,
     private val onGenerateTapped: (ControlsBlock) -> Unit,
+    private val onGptReplyTapped: () -> Unit,
     private val onGenerateFromDrop: (ControlsBlock, OverlayDropPoint) -> Unit,
     private val onGenerateChatManual: (ControlsBlock, String, String) -> Unit,
     private val onChatEnhanceAsIs: () -> Unit,
@@ -107,6 +108,7 @@ class OverlayController(
             capturePreview = capturePreview,
             chatReviewActive = false,
             chatReviewEditMode = false,
+            gptEntryActive = false,
         )
         ensurePanelAdded()
         refreshPanelWindowFlags()
@@ -121,6 +123,7 @@ class OverlayController(
             limitedContext = confidence < 0.35,
             chatReviewActive = false,
             chatReviewEditMode = false,
+            gptEntryActive = false,
         )
         ensurePanelAdded()
         refreshPanelWindowFlags()
@@ -134,6 +137,7 @@ class OverlayController(
             suggestions = emptyList(),
             chatReviewActive = false,
             chatReviewEditMode = false,
+            gptEntryActive = false,
         )
         ensurePanelAdded()
         refreshPanelWindowFlags()
@@ -154,6 +158,7 @@ class OverlayController(
             ),
             chatReviewActive = false,
             chatReviewEditMode = false,
+            gptEntryActive = false,
         )
         ensurePanelAdded()
         refreshPanelWindowFlags()
@@ -169,6 +174,29 @@ class OverlayController(
             chatReviewActive = true,
             chatReviewEditMode = false,
             chatReviewDraft = "",
+            gptEntryActive = false,
+        )
+        ensurePanelAdded()
+        refreshPanelWindowFlags()
+    }
+
+    fun showGptEntry(postTextPreview: String) {
+        state = state.copy(
+            panelVisible = true,
+            loading = false,
+            error = null,
+            suggestions = emptyList(),
+            capturePreview = OverlayCapturePreview(
+                captureModeLabel = "X quick action",
+                payloadSummary = "Use ChatGPT",
+                primaryText = postTextPreview,
+                secondaryTexts = emptyList(),
+                userDraft = "",
+            ),
+            chatReviewActive = false,
+            chatReviewEditMode = false,
+            chatReviewDraft = "",
+            gptEntryActive = true,
         )
         ensurePanelAdded()
         refreshPanelWindowFlags()
@@ -192,6 +220,7 @@ class OverlayController(
             chatReviewActive = false,
             chatReviewEditMode = false,
             chatReviewDraft = "",
+            gptEntryActive = false,
         )
         refreshPanelWindowFlags()
     }
@@ -269,6 +298,7 @@ class OverlayController(
                         onGenerateChatManual = {
                             onGenerateChatManual(state.controls, state.manualContext, state.manualDraft)
                         },
+                        onGptReply = { onGptReplyTapped() },
                         onChatReviewEditRequested = {
                             state = state.copy(chatReviewDraft = "")
                             setChatReviewEditMode(true)
@@ -501,6 +531,7 @@ data class OverlayUiState(
     val chatReviewActive: Boolean = false,
     val chatReviewEditMode: Boolean = false,
     val chatReviewDraft: String = "",
+    val gptEntryActive: Boolean = false,
     val controls: ControlsBlock = ControlsBlock(),
     val suggestions: List<ReplySuggestion> = emptyList(),
 )
